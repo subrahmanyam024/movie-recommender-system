@@ -1,0 +1,296 @@
+Hybrid Movie Recommender System Project Overview
+Problem Statement
+The goal of this project is to develop a personalized movie recommendation system that suggests relevant movies to users based on their preferences and historical ratings. With the vast number of movies available on platforms like Netflix or IMDb, users often face difficulty discovering content that aligns with their tastes. Traditional recommendation systems rely on either content-based filtering (using movie attributes like genres) or collaborative filtering (using user ratings), but both have limitations:
+
+Content-Based: May recommend similar but unrated movies, missing user preferences.
+Collaborative: Suffers from the cold-start problem (new users/items) and sparsity (few ratings).This project addresses these challenges by implementing a hybrid recommender system that combines content-based and collaborative filtering to provide accurate and diverse movie recommendations, improving user satisfaction and engagement.
+
+The system uses the MovieLens dataset, containing movie metadata (movies.csv: movieId, title, genres) and user ratings (ratings.csv: userId, movieId, rating, timestamp). The objective is to recommend the top 5 movies for a given user and movie, evaluated using metrics like RMSE and Precision@5.
+Model Used
+The hybrid recommender system integrates two approaches:
+
+Content-Based Filtering:
+Uses TF-IDF (Term Frequency-Inverse Document Frequency) to vectorize movie genres, capturing their textual similarity.
+Computes cosine similarity between movies to identify those with similar genres.
+
+
+Collaborative Filtering:
+Employs KNNBasic from the scikit-surprise library, a user-based k-nearest neighbors algorithm with cosine similarity.
+Predicts ratings based on the preferences of similar users.
+
+
+Hybrid Approach:
+Combines content-based similarity to find movies similar to a user-selected movie, then ranks them using collaborative filtering predicted ratings for the user.
+Ensures recommendations are both genre-relevant and personalized.
+
+
+
+The system is implemented in Python, with two main scripts:
+
+main.ipynb: Trains the model, evaluates performance (RMSE, Precision@5), and saves outputs.
+app.py: Deploys the model via a Streamlit web interface for user interaction.
+
+Code Explanation
+The project consists of two key components: model training/evaluation (main.ipynb) and deployment (app.py). Below is a detailed breakdown of the code.
+main.ipynb
+This Jupyter notebook loads data, trains the hybrid model, evaluates it, and saves models for deployment.
+
+Imports and Setup:
+import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import difflib
+import pickle
+import matplotlib.pyplot as plt
+import seaborn as sns
+from surprise import Dataset, Reader, KNNBasic
+from surprise.model_selection import train_test_split
+from surprise.accuracy import rmse
+import os
+
+
+Libraries for data processing (pandas, numpy), content-based filtering (TfidfVectorizer, cosine_similarity), collaborative filtering (scikit-surprise), visualization (matplotlib, seaborn), and deployment (pickle).
+Sets Matplotlib style (plt.style.use('seaborn-v0_8')) for visualizations.
+
+
+Data Loading and Cleaning:
+movies = pd.read_csv('movies.csv')
+ratings = pd.read_csv('ratings.csv')
+movies['genres'] = movies['genres'].fillna('(no genres listed)')
+movies['tags'] = movies['genres'].str.replace('|', ' ')
+movies['title'] = movies['title'].str.strip()
+new_data = movies[['movieId', 'title', 'tags']].drop_duplicates()
+
+
+Loads MovieLens datasets: movies.csv (movieId, title, genres) and ratings.csv (userId, movieId, rating, timestamp).
+Cleans data by filling missing genres, converting genres to space-separated tags for TF-IDF, stripping whitespace from titles, and removing duplicates.
+Outputs sample data to verify (e.g., 'Toy Story (1995)', genres: Adventure|Animation|Children|Comedy|Fantasy).
+
+
+Content-Based Filtering:
+tfidf = TfidfVectorizer(max_features=5000, stop_words='english')
+vector = tfidf.fit_transform(new_data['tags'].values.astype('U')).toarray()
+similarity = cosine_similarity(vector)
+with open('output/movies_list.pkl', 'wb') as f:
+    pickle.dump(new_data, f)
+with open('output/similarity.pkl', 'wb') as f:
+    pickle.dump(similarity, f)
+
+
+Vectorizes genres using TF-IDF, creating a matrix of movie features.
+Computes cosine similarity between movies to form a similarity matrix.
+Saves the movie list and similarity matrix for app.py.
+
+
+Collaborative Filtering:
+reader = Reader(rating_scale=(0.5, 5.0))
+data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
+trainset, testset = train_test_split(data, test_size=0.2, random_state=42)
+sim_options = {'name': 'cosine', 'user_based': True}
+algo = KNNBasic(k=20, sim_options=sim_options)
+algo.fit(trainset)
+predictions = algo.test(testset)
+rmse_score = rmse(predictions, verbose=False)
+print(f'RMSE: {rmse_score:.4f}')
+
+
+Loads ratings into a scikit-surprise dataset with a 0.5–5.0 rating scale.
+Splits data into 80% training and 20% testing.
+Trains a user-based KNNBasic model with 20 neighbors and cosine similarity.
+Evaluates RMSE (e.g., 0.9847), measuring rating prediction error.
+
+
+Precision@5 Evaluation:
+def precision_at_k(algo, testset, k=5, threshold=4.0):
+    user_recs = {}
+    for uid, iid, true_r, est, _ in predictions:
+        if uid not in user_recs:
+            user_recs[uid] = []
+        user_recs[uid].append((iid, est, true_r))
+    precisions = []
+    for uid in user_recs:
+        recs = sorted(user_recs[uid], key=lambda x: x[1], reverse=True)[:k]
+        relevant = sum(true_r >= threshold for _, _, true_r in recs)
+        precisions.append(relevant / k if k > 0 else 0)
+    return sum(precisions) / len(precisions) if precisions else 0
+precision = precision_at_k(algo, predictions)
+print(f'Precision@5: {precision:.4f}')
+
+
+Computes Precision@5 (e.g., 0.6610), the proportion of top 5 recommended movies rated ≥4.0 by users.
+Groups predictions by user, sorts by estimated rating, and calculates relevance based on a 4.0 threshold.
+
+
+Hybrid Recommendation:
+def hybrid_recommend(user_id, movie_title, n=5):
+    close_matches = difflib.get_close_matches(movie_title, new_data['title'], n=1, cutoff=0.8)
+    if not close_matches:
+        close = difflib.get_close_matches(movie_title, new_data['title'], n=3, cutoff=0.6)
+        return f"Movie '{movie_title}' not found. Closest matches: {close if close else 'None'}"
+    movie_title = close_matches[0]
+    movie_idx = new_data[new_data['title'] == movie_title].index[0]
+    distance = sorted(list(enumerate(similarity[movie_idx])), reverse=True, key=lambda x: x[1])[1:n+10]
+    similar_movies = [new_data.iloc[i[0]] for i in distance]
+    if user_id not in trainset._raw2inner_id_users:
+        return f"User ID {user_id} not found."
+    recommendations = []
+    for movie in similar_movies:
+        movie_id = movie['movieId']
+        if movie_id in trainset._raw2inner_id_items:
+            pred = algo.predict(user_id, movie_id)
+            recommendations.append((movie['title'], pred.est))
+    recommendations = sorted(recommendations, key=lambda x: x[1], reverse=True)[:n]
+    return recommendations if recommendations else "No recommendations available."
+
+
+Uses fuzzy matching (difflib) to handle movie title mismatches (e.g., 'Toy Story' → 'Toy Story (1995)').
+Finds 15 similar movies via content-based cosine similarity, then ranks them by collaborative predicted ratings for the user.
+Outputs recommendations (e.g., 'Moana (2016)', 4.50 for User 1, 'Toy Story (1995)').
+
+
+Output and Saving:
+with open('output/surprise_model.pkl', 'wb') as f:
+    pickle.dump(algo, f)
+with open('output/trainset.pkl', 'wb') as f:
+    pickle.dump(trainset, f)
+
+
+Saves the trained KNN model and trainset for app.py.
+Prints sample titles, RMSE (0.9847), Precision@5 (0.6610), and recommendations.
+
+
+
+app.py
+This script deploys the model via a Streamlit web interface.
+
+Imports and Loading:
+import streamlit as st
+import pandas as pd
+import pickle
+import difflib
+movies_list = pd.read_pickle('output/movies_list.pkl')
+similarity = pd.read_pickle('output/similarity.pkl')
+algo = pickle.load(open('output/surprise_model.pkl', 'rb'))
+trainset = pd.read_pickle('output/trainset.pkl')
+ratings = pd.read_csv('ratings.csv')
+
+
+Loads saved models and data from main.ipynb.
+Includes error handling for missing files.
+
+
+Hybrid Recommendation Function:
+
+Identical to main.ipynb, ensuring consistent recommendations.
+
+
+Streamlit UI:
+st.title('Hybrid Movie Recommender System')
+user_id = st.number_input('Enter User ID:', min_value=1, max_value=int(ratings['userId'].max()), step=1)
+selected_movie = st.selectbox('Select a Movie:', options=movies_list['title'].tolist())
+if st.button('Get Recommendations'):
+    recommendations = hybrid_recommend(user_id, selected_movie)
+    if isinstance(recommendations, str):
+        st.write(recommendations)
+    else:
+        st.write(f"Recommendations for User {user_id} based on '{selected_movie}':")
+        for movie, rating in recommendations:
+            st.write(f"{movie} (Predicted Rating: {rating:.2f})")
+
+
+Creates a web interface with a user ID input, movie dropdown, and recommendation button.
+Displays recommendations (e.g., 'Moana (2016)', 4.50) when the button is clicked.
+
+
+
+Performance
+
+RMSE: 0.9847, indicating predicted ratings are ~0.98 points off on average (decent but improvable).
+Precision@5: 0.6610, meaning 66.1% of top 5 recommendations are rated ≥4.0 (good for a baseline).
+Sample Output (User 1, 'Toy Story (1995)'):
+Recommendations: 'Moana (2016)' (4.50), 'Monsters, Inc. (2001)' (4.02), 'Inside Out (2015)' (3.95), 'Emperor's New Groove, The (2000)' (3.73), 'Toy Story 2 (1999)' (3.72).
+Relevant movies (animated, family-friendly) align with 'Toy Story (1995)' genres.
+
+
+
+Challenges Faced
+
+NumPy Compatibility: scikit-surprise was incompatible with NumPy 2.2.6, resolved by downgrading to NumPy <2.0 (e.g., 1.26.4).
+Movie Title Mismatches: Handled using difflib for fuzzy matching and a Streamlit dropdown for valid titles.
+Precision@5: 0.6610 is moderate, indicating potential for improvement in recommendation relevance.
+
+Further Improvements
+To enhance the model’s performance and user experience, the following updates are recommended:
+
+Advanced Algorithms:
+
+Replace KNNBasic with SVD (Singular Value Decomposition) or SVD++ from scikit-surprise to improve RMSE (0.85–0.90) and Precision@5 (0.70–0.75).
+Example:from surprise import SVD
+algo = SVD(n_factors=100, random_state=42)
+
+
+Explore deep learning models (e.g., neural collaborative filtering) using TensorFlow or PyTorch for larger datasets.
+
+
+Hyperparameter Tuning:
+
+Tune KNN parameters (k, similarity metric) or SVD parameters (n_factors, n_epochs) using grid search:from surprise.model_selection import GridSearchCV
+param_grid = {'k': [20, 40, 60], 'sim_options': {'name': ['cosine', 'pearson']}}
+gs = GridSearchCV(KNNBasic, param_grid, measures=['rmse'], cv=5)
+gs.fit(data)
+
+
+Optimize Precision@5 threshold (e.g., ≥3.5 instead of 4.0).
+
+
+Enhanced Content Features:
+
+Incorporate additional movie metadata (e.g., directors, actors, tags from MovieLens tags.csv) into TF-IDF or use word embeddings (e.g., BERT) for richer similarity.
+Example:movies['features'] = movies['genres'] + ' ' + movies['tags']
+tfidf.fit_transform(movies['features'])
+
+
+
+
+Cold-Start Handling:
+
+For new users, rely more on content-based filtering or use popularity-based recommendations.
+For new movies, use genre-based similarity until ratings are collected.
+
+
+Evaluation Metrics:
+
+Add Recall@5 and F1@5 to balance precision and coverage.
+Use cross-validation for robust metrics:from surprise.model_selection import cross_validate
+cross_validate(algo, data, measures=['RMSE', 'MAE'], cv=5)
+
+
+
+
+User Interface Enhancements:
+
+Add movie posters or descriptions in app.py using IMDb APIs.
+Implement user feedback (e.g., like/dislike buttons) to refine recommendations.
+Cache model loading in Streamlit for faster performance:@st.cache_resource
+def load_models():
+    return pd.read_pickle('output/movies_list.pkl'), pd.read_pickle('output/similarity.pkl'), ...
+
+
+
+
+Scalability:
+
+For larger datasets, use sparse matrices in scikit-surprise or distributed frameworks (e.g., Spark MLlib).
+Precompute similarity matrices for faster inference.
+
+
+Diversity:
+
+Introduce diversity metrics to avoid recommending overly similar movies (e.g., mix genres).
+Example: Penalize similarity scores for movies in the same genre cluster.
+
+
+
+Conclusion
+The hybrid movie recommender system effectively combines content-based and collaborative filtering to provide personalized movie recommendations. With a Precision@5 of 0.6610 and RMSE of 0.9847, it performs adequately for a baseline model but has room for improvement. By adopting advanced algorithms, tuning parameters, enhancing features, and improving the UI, the system can achieve higher accuracy and user satisfaction, making it suitable for production environments like streaming platforms.

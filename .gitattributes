@@ -1,0 +1,10 @@
+# Normalize text files to LF
+*.py text eol=lf
+*.ipynb text eol=lf
+*.csv text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+# Binary files (no line ending conversion)
+*.pkl binary
+*.png binary
+*.js binary
